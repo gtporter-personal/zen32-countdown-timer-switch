@@ -466,6 +466,13 @@ action:
       #      paddle LED (and, for non-countdown automations, the dropdown) ----
       - conditions: "{{ trigger.id == 'switch_on' }}"
         sequence:
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "23"
+              value: "1"
+              endpoint: "0"
           - variables:
               auto_caused: "{{ trigger.to_state.context.parent_id is not none }}"
               already_countdown: "{{ is_state(switch_status_entity, 'On - Countdown Timer') }}"
@@ -578,14 +585,14 @@ action:
                             value: "{{ '3' if remaining_sec > threshold_sec else (('3' if phase_on else '2') if remaining_sec > next_lower_sec else '2') }}"
                             endpoint: "0"
           - choose:
-              - conditions: "{{ is_state(switch_entity, 'on') }}"
+              - conditions: "{{ is_state(switch_entity, 'on') and states(switch_status_entity) not in ['On - Manual', 'Off'] }}"
                 sequence:
                   - service: zwave_js.set_config_parameter
                     target:
                       device_id: !input zen32_device
                     data:
                       parameter: "1"
-                      value: "{{ '3' if states(switch_status_entity) in ['On - Manual', 'Off'] else ('3' if phase_on else '2') }}"
+                      value: "{{ '3' if phase_on else '2' }}"
                       endpoint: "0"
 
       # ---- Home Assistant restart: disable flash, resync idle state ----
