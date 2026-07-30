@@ -422,6 +422,7 @@ action:
                 {% set idx = {'button_1': 0, 'button_2': 1, 'button_3': 2, 'button_4': 3}[trigger.id] %}
                 {{ buttons[idx].minutes | int }}
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -440,6 +441,7 @@ action:
                     lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
                     next_lower: "{{ (lowers | max) if lowers | length > 0 else 0 }}"
                 - service: zwave_js.set_config_parameter
+                  continue_on_error: true
                   target:
                     device_id: !input zen32_device
                   data:
@@ -447,6 +449,7 @@ action:
                     value: "{{ led_color }}"
                     endpoint: "0"
                 - service: zwave_js.set_config_parameter
+                  continue_on_error: true
                   target:
                     device_id: !input zen32_device
                   data:
@@ -454,6 +457,7 @@ action:
                     value: "{{ led_brightness }}"
                     endpoint: "0"
                 - service: zwave_js.set_config_parameter
+                  continue_on_error: true
                   target:
                     device_id: !input zen32_device
                   data:
@@ -492,6 +496,7 @@ action:
       - conditions: "{{ trigger.id == 'switch_on' }}"
         sequence:
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -534,6 +539,7 @@ action:
               - variables:
                   paddle_color: "{{ external_led_color }}"
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -541,6 +547,7 @@ action:
               value: "{{ paddle_color }}"
               endpoint: "0"
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -548,6 +555,7 @@ action:
               value: "{{ led_brightness }}"
               endpoint: "0"
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -567,6 +575,7 @@ action:
             data:
               option: "Off"
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -577,6 +586,7 @@ action:
               for_each: "{{ buttons }}"
               sequence:
                 - service: zwave_js.set_config_parameter
+                  continue_on_error: true
                   target:
                     device_id: !input zen32_device
                   data:
@@ -603,6 +613,7 @@ action:
                             lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
                             next_lower_sec: "{{ ((lowers | max) if lowers | length > 0 else 0) * 60 }}"
                         - service: zwave_js.set_config_parameter
+                          continue_on_error: true
                           target:
                             device_id: !input zen32_device
                           data:
@@ -614,6 +625,7 @@ action:
       - conditions: "{{ trigger.id == 'ha_start' }}"
         sequence:
           - service: zwave_js.set_config_parameter
+            continue_on_error: true
             target:
               device_id: !input zen32_device
             data:
@@ -632,6 +644,7 @@ action:
                     data:
                       option: "Off"
                   - service: zwave_js.set_config_parameter
+                    continue_on_error: true
                     target:
                       device_id: !input zen32_device
                     data:
@@ -642,6 +655,7 @@ action:
                       for_each: "{{ buttons }}"
                       sequence:
                         - service: zwave_js.set_config_parameter
+                          continue_on_error: true
                           target:
                             device_id: !input zen32_device
                           data:
