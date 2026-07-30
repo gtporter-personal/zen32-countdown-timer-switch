@@ -399,6 +399,9 @@ trigger:
   - platform: state
     entity_id: !input countdown_timer
     id: timer_started
+  - platform: state
+    entity_id: !input switch_status
+    id: status_changed
   - platform: time_pattern
     seconds: !input led_update_interval
     id: timer_tick
@@ -529,8 +532,11 @@ action:
                     target:
                       entity_id: !input target_switch
 
-      # ---- Switch turned on: figure out who turned it on and set the
-      #      paddle LED (and, for non-countdown automations, the dropdown) ----
+      # ---- Switch turned on: figure out who turned it on and tag the
+      #      dropdown accordingly. The status_changed handler below reacts
+      #      to that tag and actually sets the paddle LED - if the tag was
+      #      already set moments ago (self-tagged countdown/manual), there's
+      #      nothing further to do here, it's already been applied. ----
       - conditions: "{{ trigger.id == 'switch_on' }}"
         sequence:
           - service: zwave_js.set_config_parameter
@@ -548,15 +554,12 @@ action:
               hygrostat_active: "{{ hygrostat_id is not none and state_attr(hygrostat_id, 'action') == 'drying' }}"
           - choose:
               # Self-tagged by this blueprint's own countdown or paddle branch
-              # moments ago - these are certain, so they win outright.
+              # moments ago - these are certain, so they win outright and
+              # nothing further needs to happen.
               - conditions: "{{ auto_caused and already_countdown }}"
-                sequence:
-                  - variables:
-                      paddle_color: "{{ countdown_led_color }}"
+                sequence: []
               - conditions: "{{ already_manual }}"
-                sequence:
-                  - variables:
-                      paddle_color: "{{ paddle_led_color }}"
+                sequence: []
               # Not self-tagged: fall back to best-effort signals. Hygrostat's
               # action mirrors its target switch's live state rather than
               # recording a decision, and event context can't tell a manual
@@ -572,8 +575,6 @@ action:
                       entity_id: !input switch_status
                     data:
                       option: "On - Humidity Control"
-                  - variables:
-                      paddle_color: "{{ humidity_led_color }}"
               - conditions: "{{ not auto_caused }}"
                 sequence:
                   - service: input_select.select_option
@@ -581,40 +582,61 @@ action:
                       entity_id: !input switch_status
                     data:
                       option: "On - Manual"
-                  - variables:
-                      paddle_color: "{{ paddle_led_color }}"
             default:
               - service: input_select.select_option
                 target:
                   entity_id: !input switch_status
                 data:
                   option: "On - External Automation"
-              - variables:
-                  paddle_color: "{{ external_led_color }}"
-          - service: zwave_js.set_config_parameter
-            continue_on_error: true
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "6"
-              value: "{{ paddle_color }}"
-              endpoint: "0"
-          - service: zwave_js.set_config_parameter
-            continue_on_error: true
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "11"
-              value: "{{ led_brightness }}"
-              endpoint: "0"
-          - service: zwave_js.set_config_parameter
-            continue_on_error: true
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "1"
-              value: "3"
-              endpoint: "0"
+
+      # ---- Switch status changed (by any means): update the paddle LED to
+      #      match. This is the single place that writes the paddle's color
+      #      - every other branch only ever changes switch_status and lets
+      #      this react, so a status change from any source (this blueprint,
+      #      another automation, or the dropdown's own UI) always updates
+      #      the LED. ----
+      - conditions: "{{ trigger.id == 'status_changed' }}"
+        sequence:
+          - variables:
+              status_color: >
+                {% set colors = {'On - Manual': paddle_led_color, 'On - Countdown Timer': countdown_led_color, 'On - Humidity Control': humidity_led_color, 'On - External Automation': external_led_color} %}
+                {{ colors.get(states(switch_status_entity), none) }}
+          - choose:
+              - conditions: "{{ status_color is not none }}"
+                sequence:
+                  - service: zwave_js.set_config_parameter
+                    continue_on_error: true
+                    target:
+                      device_id: !input zen32_device
+                    data:
+                      parameter: "6"
+                      value: "{{ status_color }}"
+                      endpoint: "0"
+                  - service: zwave_js.set_config_parameter
+                    continue_on_error: true
+                    target:
+                      device_id: !input zen32_device
+                    data:
+                      parameter: "11"
+                      value: "{{ led_brightness }}"
+                      endpoint: "0"
+                  - service: zwave_js.set_config_parameter
+                    continue_on_error: true
+                    target:
+                      device_id: !input zen32_device
+                    data:
+                      parameter: "1"
+                      value: "3"
+                      endpoint: "0"
+            default:
+              - service: zwave_js.set_config_parameter
+                continue_on_error: true
+                target:
+                  device_id: !input zen32_device
+                data:
+                  parameter: "1"
+                  value: "2"
+                  endpoint: "0"
 
       # ---- Switch turned off (any reason): cancel timer, clear all LEDs ----
       - conditions: "{{ trigger.id == 'switch_off' }}"
