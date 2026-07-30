@@ -26,8 +26,7 @@ blueprint:
 
     3. This blueprint sets ZEN32 parameter 23 (LED flash on setting change)
        to disabled the first time it runs and on every Home Assistant
-       restart, so the countdown LEDs don't get an extra flash on top of
-       the intended blink.
+       restart, so LED updates don't get an extra flash tacked on.
 
     4. Optional: if you have a Generic Hygrostat helper (Settings >
        Devices & Services > Helpers > Create Helper > Generic Hygrostat)
@@ -53,8 +52,8 @@ blueprint:
       not `switch_directly_wired` is on. Turning the switch off (by any
       means) cancels any running countdown, sets the dropdown to `Off`,
       and clears all the LEDs. Its own LED stays solid the whole time the
-      switch is on (it never blinks - only the active countdown button's
-      LED does that) and its color shows *why* the switch is on:
+      switch is on (nothing in this blueprint blinks - LEDs 1-4 are solid
+      too, see below) and its color shows *why* the switch is on:
       `paddle_led_color` for `On - Manual`; `countdown_led_color` for
       `On - Countdown Timer` if this blueprint's countdown turned it on;
       `humidity_led_color` for `On - Humidity Control` if the optional
@@ -76,19 +75,26 @@ blueprint:
       you extend or shorten a running timer. Remove that branch below if
       you'd rather the small buttons do nothing while the switch is
       already on. When the countdown reaches zero the switch turns off
-      automatically.
+      automatically. The countdown `timer` helper is the actual source of
+      truth: starting, restarting, or extending it directly (from its
+      dashboard card, Developer Tools, or any other automation) turns the
+      switch on, sets the dropdown to `On - Countdown Timer`, and sets the
+      LEDs to match, exactly as if a button had been pressed - you don't
+      have to go through this device to drive the countdown.
 
-    - LEDs 1-4 show remaining time like a fuel gauge: solid once the
-      remaining time has more than that button's time left banked, blinking
-      for whichever button's time bracket the countdown is currently in,
-      and off for buttons above the current bracket.
+    - LEDs 1-4 show remaining time like a fuel gauge: each button's LED is
+      solid while there's still more time remaining than the next lower
+      button's time, and off once remaining time drops to or below that -
+      so with the default 5/10/15/30 minute buttons, a 30-minute countdown
+      lights all four at first and they turn off one at a time as each
+      15/10/5-minute segment is used up, until only button 1 stays lit for
+      the final 5 minutes.
 
 
-    Note on Z-Wave traffic: keeping the active countdown button's LED
-    blinking means a Configuration Set is sent roughly every
-    `blink_interval` seconds for as long as the countdown runs. The
-    default (2s) is a reasonable balance; pick a longer interval if your
-    mesh is busy or this device is a weak router.
+    Note on Z-Wave traffic: LEDs only get updated when a segment boundary
+    is actually crossed, checked every `led_update_interval` (default
+    15s) while a countdown is running - so a Configuration Set only goes
+    out a handful of times over the whole countdown, not continuously.
   domain: automation
   input:
     zen32_device:
@@ -299,22 +305,28 @@ blueprint:
               label: Medium (60%)
             - value: "2"
               label: Low (30%)
-    blink_interval:
-      name: Blink update interval
-      description: How often the active LED's blink is refreshed. Shorter is snappier but chattier on the Z-Wave mesh.
-      default: "/2"
+    led_update_interval:
+      name: LED update interval
+      description: >
+        How often the countdown checks for a segment boundary crossing and
+        updates LEDs 1-4. Since LEDs are solid (not blinking), this only
+        needs to be frequent enough that a segment turning off feels
+        prompt - it doesn't affect responsiveness of anything else.
+      default: "/15"
       selector:
         select:
           mode: dropdown
           options:
-            - value: "/1"
-              label: Every 1 second (fastest, most traffic)
-            - value: "/2"
-              label: Every 2 seconds (recommended)
-            - value: "/3"
-              label: Every 3 seconds
             - value: "/5"
-              label: Every 5 seconds (slowest, least traffic)
+              label: Every 5 seconds
+            - value: "/10"
+              label: Every 10 seconds
+            - value: "/15"
+              label: Every 15 seconds (recommended)
+            - value: "/30"
+              label: Every 30 seconds
+            - value: "/60"
+              label: Every 60 seconds (least traffic)
 
 mode: restart
 max_exceeded: silent
@@ -383,8 +395,11 @@ trigger:
     event_data:
       entity_id: !input countdown_timer
     id: timer_finished
+  - platform: state
+    entity_id: !input countdown_timer
+    id: timer_started
   - platform: time_pattern
-    seconds: !input blink_interval
+    seconds: !input led_update_interval
     id: timer_tick
   - platform: homeassistant
     event: start
@@ -406,12 +421,10 @@ action:
       external_led_color: !input external_led_color
       hygrostat_raw: !input hygrostat_entity
       led_brightness: !input led_brightness
-      blink_interval: !input blink_interval
       time_1: !input time_1
       time_2: !input time_2
       time_3: !input time_3
       time_4: !input time_4
-      interval_seconds: "{{ blink_interval | replace('/', '') | int }}"
       hygrostat_id: "{{ hygrostat_raw if hygrostat_raw is string and hygrostat_raw != '' else (hygrostat_raw[0] if hygrostat_raw is sequence and hygrostat_raw | count > 0 else none) }}"
       buttons: "{{ [{'minutes': time_1 | int, 'mode_param': 2, 'color_param': 7, 'bright_param': 12}, {'minutes': time_2 | int, 'mode_param': 3, 'color_param': 8, 'bright_param': 13}, {'minutes': time_3 | int, 'mode_param': 4, 'color_param': 9, 'bright_param': 14}, {'minutes': time_4 | int, 'mode_param': 5, 'color_param': 10, 'bright_param': 15}] }}"
 
@@ -436,12 +449,29 @@ action:
               entity_id: !input countdown_timer
             data:
               duration: "{{ '%02d:%02d:00' | format(pressed_minutes // 60, pressed_minutes % 60) }}"
+
+      # ---- Timer helper became (or remained) active - the timer is the
+      #      source of truth, so this fires identically whether a button
+      #      was pressed, the timer was started/restarted from its own
+      #      dashboard card, or another automation started it directly.
+      #      Turns the switch on, tags the dropdown, and sets LEDs 1-4 to
+      #      match the actual remaining time. ----
+      - conditions: "{{ trigger.id == 'timer_started' and is_state(timer_entity, 'active') }}"
+        sequence:
+          - service: input_select.select_option
+            target:
+              entity_id: !input switch_status
+            data:
+              option: "On - Countdown Timer"
+          - variables:
+              finishes_at: "{{ state_attr(timer_entity, 'finishes_at') }}"
+              remaining_sec: "{{ [(as_timestamp(finishes_at) - as_timestamp(now())), 0] | max }}"
           - repeat:
               for_each: "{{ buttons }}"
               sequence:
                 - variables:
                     lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
-                    next_lower: "{{ (lowers | max) if lowers | length > 0 else 0 }}"
+                    next_lower_sec: "{{ ((lowers | max) if lowers | length > 0 else 0) * 60 }}"
                 - service: zwave_js.set_config_parameter
                   continue_on_error: true
                   target:
@@ -464,13 +494,8 @@ action:
                     device_id: !input zen32_device
                   data:
                     parameter: "{{ repeat.item.mode_param }}"
-                    value: "{{ '3' if pressed_minutes > repeat.item.minutes else ('3' if pressed_minutes > next_lower else '2') }}"
+                    value: "{{ '3' if remaining_sec > next_lower_sec else '2' }}"
                     endpoint: "0"
-          - service: input_select.select_option
-            target:
-              entity_id: !input switch_status
-            data:
-              option: "On - Countdown Timer"
           - service: homeassistant.turn_on
             target:
               entity_id: !input target_switch
@@ -621,32 +646,27 @@ action:
                     value: "2"
                     endpoint: "0"
 
-      # ---- Periodic tick: advance the blink/bracket display ----
-      - conditions: "{{ trigger.id == 'timer_tick' }}"
+      # ---- Periodic tick: catch segment boundaries crossed since the
+      #      timer last (re)started or the last tick ----
+      - conditions: "{{ trigger.id == 'timer_tick' and is_state(timer_entity, 'active') }}"
         sequence:
           - variables:
-              phase_on: "{{ ((now().timestamp() | int) // interval_seconds) % 2 == 0 }}"
-          - choose:
-              - conditions: "{{ is_state(timer_entity, 'active') }}"
-                sequence:
-                  - variables:
-                      finishes_at: "{{ state_attr(timer_entity, 'finishes_at') }}"
-                      remaining_sec: "{{ [(as_timestamp(finishes_at) - as_timestamp(now())), 0] | max }}"
-                  - repeat:
-                      for_each: "{{ buttons }}"
-                      sequence:
-                        - variables:
-                            threshold_sec: "{{ repeat.item.minutes * 60 }}"
-                            lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
-                            next_lower_sec: "{{ ((lowers | max) if lowers | length > 0 else 0) * 60 }}"
-                        - service: zwave_js.set_config_parameter
-                          continue_on_error: true
-                          target:
-                            device_id: !input zen32_device
-                          data:
-                            parameter: "{{ repeat.item.mode_param }}"
-                            value: "{{ '3' if remaining_sec > threshold_sec else (('3' if phase_on else '2') if remaining_sec > next_lower_sec else '2') }}"
-                            endpoint: "0"
+              finishes_at: "{{ state_attr(timer_entity, 'finishes_at') }}"
+              remaining_sec: "{{ [(as_timestamp(finishes_at) - as_timestamp(now())), 0] | max }}"
+          - repeat:
+              for_each: "{{ buttons }}"
+              sequence:
+                - variables:
+                    lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
+                    next_lower_sec: "{{ ((lowers | max) if lowers | length > 0 else 0) * 60 }}"
+                - service: zwave_js.set_config_parameter
+                  continue_on_error: true
+                  target:
+                    device_id: !input zen32_device
+                  data:
+                    parameter: "{{ repeat.item.mode_param }}"
+                    value: "{{ '3' if remaining_sec > next_lower_sec else '2' }}"
+                    endpoint: "0"
 
       # ---- Home Assistant restart: disable flash, resync idle state ----
       - conditions: "{{ trigger.id == 'ha_start' }}"
