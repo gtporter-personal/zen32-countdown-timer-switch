@@ -316,45 +316,55 @@ mode: restart
 max_exceeded: silent
 
 trigger:
-  - platform: zwave_js.value_updated
-    device_id: !input zen32_device
-    command_class: 91
-    property: scene
-    property_key: "001"
-    endpoint: 0
-    to: KeyPressed
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input zen32_device
+      command_class: 91
+      property: scene
+      property_key: "001"
+      endpoint: 0
+      value: KeyPressed
     id: button_1
-  - platform: zwave_js.value_updated
-    device_id: !input zen32_device
-    command_class: 91
-    property: scene
-    property_key: "002"
-    endpoint: 0
-    to: KeyPressed
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input zen32_device
+      command_class: 91
+      property: scene
+      property_key: "002"
+      endpoint: 0
+      value: KeyPressed
     id: button_2
-  - platform: zwave_js.value_updated
-    device_id: !input zen32_device
-    command_class: 91
-    property: scene
-    property_key: "003"
-    endpoint: 0
-    to: KeyPressed
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input zen32_device
+      command_class: 91
+      property: scene
+      property_key: "003"
+      endpoint: 0
+      value: KeyPressed
     id: button_3
-  - platform: zwave_js.value_updated
-    device_id: !input zen32_device
-    command_class: 91
-    property: scene
-    property_key: "004"
-    endpoint: 0
-    to: KeyPressed
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input zen32_device
+      command_class: 91
+      property: scene
+      property_key: "004"
+      endpoint: 0
+      value: KeyPressed
     id: button_4
-  - platform: zwave_js.value_updated
-    device_id: !input zen32_device
-    command_class: 91
-    property: scene
-    property_key: "005"
-    endpoint: 0
-    to: KeyPressed
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input zen32_device
+      command_class: 91
+      property: scene
+      property_key: "005"
+      endpoint: 0
+      value: KeyPressed
     id: paddle
   - platform: state
     entity_id: !input target_switch
