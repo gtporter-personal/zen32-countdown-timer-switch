@@ -45,25 +45,26 @@ blueprint:
 
     - Big paddle: manual on/off, always available. Turning the switch off
       (by any means) cancels any running countdown, sets the dropdown
-      helper to `Off`, and clears all the LEDs. Its own LED shows *why*
-      the switch is on: solid (in `paddle_led_color`) and dropdown set to
-      `On - Manual` if it was switched on manually - paddle press,
-      physical toggle, or the Home Assistant dashboard; blinking in
-      `countdown_led_color` and dropdown set to `On - Countdown Timer` if
-      this blueprint's countdown turned it on; blinking in
-      `humidity_led_color` and dropdown set to `On - Humidity Control` if
-      it wasn't manual, wasn't this blueprint's countdown, and the
+      helper to `Off`, and clears all the LEDs. Its own LED stays solid
+      the whole time the switch is on (it never blinks - only the active
+      countdown button's LED does that) and its color shows *why* the
+      switch is on: `paddle_led_color` and dropdown set to `On - Manual`
+      if it was switched on manually - paddle press, physical toggle, or
+      the Home Assistant dashboard; `countdown_led_color` and dropdown set
+      to `On - Countdown Timer` if this blueprint's countdown turned it
+      on; `humidity_led_color` and dropdown set to `On - Humidity Control`
+      if it wasn't manual, wasn't this blueprint's countdown, and the
       optional `hygrostat_entity` currently reports `action: drying`;
-      blinking in `external_led_color` and dropdown set to
-      `On - External Automation` for anything else automation-caused.
-      Manual is always checked first and wins over the hygrostat check,
-      so a paddle press (or dashboard toggle) is never mislabeled as
-      humidity control even if the hygrostat happens to be armed and
-      ends up mirroring the switch's new "on" state. This manual/automation
-      split is told apart using Home Assistant's event context, so it's
-      only reliable when `switch_directly_wired` is on (the default) -
-      when it's off, this blueprint's own paddle-press toggle also counts
-      as automation-triggered and won't be recognized as manual, a side
+      `external_led_color` and dropdown set to `On - External Automation`
+      for anything else automation-caused. Manual is always checked first
+      and wins over the hygrostat check, so a paddle press (or dashboard
+      toggle) is never mislabeled as humidity control even if the
+      hygrostat happens to be armed and ends up mirroring the switch's new
+      "on" state. This manual/automation split is told apart using Home
+      Assistant's event context, so it's only reliable when
+      `switch_directly_wired` is on (the default) - when it's off, this
+      blueprint's own paddle-press toggle also counts as
+      automation-triggered and won't be recognized as manual, a side
       effect of routing that toggle through a service call.
 
     - Small buttons 1-4: if the switch is off, turns it on and starts a
@@ -72,7 +73,8 @@ blueprint:
       instead (re)starts the countdown at that button's time - this lets
       you extend or shorten a running timer. Remove that branch below if
       you'd rather the small buttons do nothing while the switch is
-      already on.
+      already on. When the countdown reaches zero the switch turns off
+      automatically.
 
     - LEDs 1-4 show remaining time like a fuel gauge: solid once the
       remaining time has more than that button's time left banked, blinking
@@ -80,11 +82,11 @@ blueprint:
       and off for buttons above the current bracket.
 
 
-    Note on Z-Wave traffic: keeping one LED blinking means a Configuration
-    Set is sent roughly every `blink_interval` seconds for the whole
-    duration the switch is on. The default (2s) is a reasonable balance;
-    pick a longer interval if your mesh is busy or this device is a weak
-    router.
+    Note on Z-Wave traffic: keeping the active countdown button's LED
+    blinking means a Configuration Set is sent roughly every
+    `blink_interval` seconds for as long as the countdown runs. The
+    default (2s) is a reasonable balance; pick a longer interval if your
+    mesh is busy or this device is a weak router.
   domain: automation
   input:
     zen32_device:
@@ -218,7 +220,7 @@ blueprint:
               label: Cyan
     countdown_led_color:
       name: Big paddle LED color - countdown timer
-      description: Paddle LED color while this blueprint's countdown has the switch on (blinking).
+      description: Paddle LED color (solid) while this blueprint's countdown has the switch on.
       default: "5"
       selector:
         select:
@@ -240,7 +242,7 @@ blueprint:
               label: Cyan
     humidity_led_color:
       name: Big paddle LED color - humidity control
-      description: Paddle LED color while the hygrostat has the switch on for humidity control (blinking).
+      description: Paddle LED color (solid) while the hygrostat has the switch on for humidity control.
       default: "6"
       selector:
         select:
@@ -262,7 +264,7 @@ blueprint:
               label: Cyan
     external_led_color:
       name: Big paddle LED color - external automation
-      description: Paddle LED color while another automation has the switch on (blinking).
+      description: Paddle LED color (solid) while another automation has the switch on.
       default: "4"
       selector:
         select:
@@ -374,6 +376,11 @@ trigger:
     entity_id: !input target_switch
     to: "off"
     id: switch_off
+  - platform: event
+    event_type: timer.finished
+    event_data:
+      entity_id: !input countdown_timer
+    id: timer_finished
   - platform: time_pattern
     seconds: !input blink_interval
     id: timer_tick
@@ -459,6 +466,14 @@ action:
             data:
               option: "On - Countdown Timer"
           - service: homeassistant.turn_on
+            target:
+              entity_id: !input target_switch
+
+      # ---- Countdown reached zero: turn the switch off (switch_off branch
+      #      below handles cancelling the timer and clearing the LEDs) ----
+      - conditions: "{{ trigger.id == 'timer_finished' }}"
+        sequence:
+          - service: homeassistant.turn_off
             target:
               entity_id: !input target_switch
 
@@ -594,16 +609,6 @@ action:
                             parameter: "{{ repeat.item.mode_param }}"
                             value: "{{ '3' if remaining_sec > threshold_sec else (('3' if phase_on else '2') if remaining_sec > next_lower_sec else '2') }}"
                             endpoint: "0"
-          - choose:
-              - conditions: "{{ is_state(switch_entity, 'on') and states(switch_status_entity) not in ['On - Manual', 'Off'] }}"
-                sequence:
-                  - service: zwave_js.set_config_parameter
-                    target:
-                      device_id: !input zen32_device
-                    data:
-                      parameter: "1"
-                      value: "{{ '3' if phase_on else '2' }}"
-                      endpoint: "0"
 
       # ---- Home Assistant restart: disable flash, resync idle state ----
       - conditions: "{{ trigger.id == 'ha_start' }}"
