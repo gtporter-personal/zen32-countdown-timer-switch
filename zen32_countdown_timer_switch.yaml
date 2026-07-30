@@ -1,0 +1,567 @@
+blueprint:
+  name: ZEN32 Countdown Timer Switch
+  description: >
+    Turns a switch into a countdown timer using a Zooz ZEN32 scene
+    controller.
+
+
+    **Setup you need to do first:**
+
+    1. Create a `timer` helper and an `input_select` (dropdown) helper
+       (Settings > Devices & Services > Helpers > Create Helper). The
+       timer's duration doesn't matter, it's overridden every time a
+       button is pressed. The dropdown remembers *why* the switch is
+       currently on so the paddle LED and any other automation can agree
+       on it - name it whatever you like, but its options must be exactly
+       these four strings: `Off`, `On - Countdown Timer`,
+       `On - External Automation`, `On - Manual`. Select both helpers
+       below.
+
+    2. Wire the switch to the ZEN32's load (relay) terminals if you want
+       the big paddle to physically switch it even when Home Assistant is
+       offline. That's the "always works" manual on/off. If you leave the
+       relay unused / in smart-bulb mode and control a separate switch,
+       turn off "Switch is wired to the relay" below so this blueprint
+       toggles that entity itself when the paddle is pressed.
+
+    3. This blueprint sets ZEN32 parameter 23 (LED flash on setting change)
+       to disabled the first time it runs and on every Home Assistant
+       restart, so the countdown LEDs don't get an extra flash on top of
+       the intended blink.
+
+
+    **Button behavior:**
+
+    - Big paddle: manual on/off, always available. Turning the switch off
+      (by any means) cancels any running countdown, sets the dropdown
+      helper to `Off`, and clears all the LEDs. Its own LED shows *why*
+      the switch is on: solid (in `paddle_led_color`) and dropdown set to
+      `On - Manual` if it was switched on manually - paddle press,
+      physical toggle, or the Home Assistant dashboard; blinking in
+      `countdown_led_color` and dropdown set to `On - Countdown Timer` if
+      this blueprint's countdown turned it on; blinking in
+      `external_led_color` and dropdown set to `On - External Automation`
+      if any other automation turned it on (this blueprint only knows
+      "not me and not manual", so it labels any other automation-caused
+      on-state that way). Manual vs. automation is told apart using Home
+      Assistant's event context, so it's only reliable when
+      `switch_directly_wired` is on (the default) - when it's off, this
+      blueprint's own paddle-press toggle also counts as
+      automation-triggered and will show `On - External Automation` even
+      though you pressed the paddle, a side effect of routing that toggle
+      through a service call.
+
+    - Small buttons 1-4: if the switch is off, turns it on and starts a
+      countdown for that button's configured time. If the switch is
+      already on (manually or mid-countdown), pressing a small button
+      instead (re)starts the countdown at that button's time - this lets
+      you extend or shorten a running timer. Remove that branch below if
+      you'd rather the small buttons do nothing while the switch is
+      already on.
+
+    - LEDs 1-4 show remaining time like a fuel gauge: solid once the
+      remaining time has more than that button's time left banked, blinking
+      for whichever button's time bracket the countdown is currently in,
+      and off for buttons above the current bracket.
+
+
+    Note on Z-Wave traffic: keeping one LED blinking means a Configuration
+    Set is sent roughly every `blink_interval` seconds for the whole
+    duration the switch is on. The default (2s) is a reasonable balance;
+    pick a longer interval if your mesh is busy or this device is a weak
+    router.
+  domain: automation
+  input:
+    zen32_device:
+      name: ZEN32 Scene Controller
+      description: The ZEN32 device (Z-Wave JS).
+      selector:
+        device:
+          filter:
+            - integration: zwave_js
+    target_switch:
+      name: Controlled switch
+      description: >
+        The switch entity being controlled. If it's wired to the ZEN32's
+        own relay, this is that relay's switch entity.
+      selector:
+        entity:
+          domain: switch
+    countdown_timer:
+      name: Countdown timer helper
+      description: The `timer` helper created in setup step 1.
+      selector:
+        entity:
+          domain: timer
+    switch_status:
+      name: Switch status dropdown helper
+      description: >
+        The `input_select` helper created in setup step 1. Its options must
+        be exactly: Off, On - Countdown Timer, On - External Automation, On - Manual.
+      selector:
+        entity:
+          domain: input_select
+    switch_directly_wired:
+      name: Switch is wired to the relay
+      description: >
+        On: the ZEN32 relay physically switches it, so the paddle already
+        turns it on/off in hardware and this blueprint only needs to react
+        to that. Off: the blueprint will explicitly toggle target_switch
+        when the paddle is pressed.
+      default: true
+      selector:
+        boolean: {}
+    time_1:
+      name: Button 1 time
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+          mode: box
+    time_2:
+      name: Button 2 time
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+          mode: box
+    time_3:
+      name: Button 3 time
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+          mode: box
+    time_4:
+      name: Button 4 time
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+          mode: box
+    led_color:
+      name: LED color when lit
+      default: "2"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: White
+            - value: "1"
+              label: Blue
+            - value: "2"
+              label: Green
+            - value: "3"
+              label: Red
+            - value: "4"
+              label: Magenta
+            - value: "5"
+              label: Yellow
+            - value: "6"
+              label: Cyan
+    paddle_led_color:
+      name: Big paddle LED color - manual
+      description: Paddle LED color while the switch is on manually (solid).
+      default: "1"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: White
+            - value: "1"
+              label: Blue
+            - value: "2"
+              label: Green
+            - value: "3"
+              label: Red
+            - value: "4"
+              label: Magenta
+            - value: "5"
+              label: Yellow
+            - value: "6"
+              label: Cyan
+    countdown_led_color:
+      name: Big paddle LED color - countdown timer
+      description: Paddle LED color while this blueprint's countdown has the switch on (blinking).
+      default: "5"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: White
+            - value: "1"
+              label: Blue
+            - value: "2"
+              label: Green
+            - value: "3"
+              label: Red
+            - value: "4"
+              label: Magenta
+            - value: "5"
+              label: Yellow
+            - value: "6"
+              label: Cyan
+    external_led_color:
+      name: Big paddle LED color - external automation
+      description: Paddle LED color while another automation has the switch on (blinking).
+      default: "4"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: White
+            - value: "1"
+              label: Blue
+            - value: "2"
+              label: Green
+            - value: "3"
+              label: Red
+            - value: "4"
+              label: Magenta
+            - value: "5"
+              label: Yellow
+            - value: "6"
+              label: Cyan
+    led_brightness:
+      name: LED brightness
+      default: "0"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: Bright (100%)
+            - value: "1"
+              label: Medium (60%)
+            - value: "2"
+              label: Low (30%)
+    blink_interval:
+      name: Blink update interval
+      description: How often the active LED's blink is refreshed. Shorter is snappier but chattier on the Z-Wave mesh.
+      default: "/2"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "/1"
+              label: Every 1 second (fastest, most traffic)
+            - value: "/2"
+              label: Every 2 seconds (recommended)
+            - value: "/3"
+              label: Every 3 seconds
+            - value: "/5"
+              label: Every 5 seconds (slowest, least traffic)
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: zwave_js.value_updated
+    device_id: !input zen32_device
+    command_class: 91
+    property: scene
+    property_key: "001"
+    endpoint: 0
+    to: KeyPressed
+    id: button_1
+  - platform: zwave_js.value_updated
+    device_id: !input zen32_device
+    command_class: 91
+    property: scene
+    property_key: "002"
+    endpoint: 0
+    to: KeyPressed
+    id: button_2
+  - platform: zwave_js.value_updated
+    device_id: !input zen32_device
+    command_class: 91
+    property: scene
+    property_key: "003"
+    endpoint: 0
+    to: KeyPressed
+    id: button_3
+  - platform: zwave_js.value_updated
+    device_id: !input zen32_device
+    command_class: 91
+    property: scene
+    property_key: "004"
+    endpoint: 0
+    to: KeyPressed
+    id: button_4
+  - platform: zwave_js.value_updated
+    device_id: !input zen32_device
+    command_class: 91
+    property: scene
+    property_key: "005"
+    endpoint: 0
+    to: KeyPressed
+    id: paddle
+  - platform: state
+    entity_id: !input target_switch
+    to: "on"
+    id: switch_on
+  - platform: state
+    entity_id: !input target_switch
+    to: "off"
+    id: switch_off
+  - platform: time_pattern
+    seconds: !input blink_interval
+    id: timer_tick
+  - platform: homeassistant
+    event: start
+    id: ha_start
+
+condition: []
+
+action:
+  - variables:
+      device_id: !input zen32_device
+      switch_entity: !input target_switch
+      timer_entity: !input countdown_timer
+      switch_status_entity: !input switch_status
+      wired: !input switch_directly_wired
+      led_color: !input led_color
+      paddle_led_color: !input paddle_led_color
+      countdown_led_color: !input countdown_led_color
+      external_led_color: !input external_led_color
+      led_brightness: !input led_brightness
+      blink_interval: !input blink_interval
+      time_1: !input time_1
+      time_2: !input time_2
+      time_3: !input time_3
+      time_4: !input time_4
+      interval_seconds: "{{ blink_interval | replace('/', '') | int }}"
+      buttons: "{{ [{'minutes': time_1 | int, 'mode_param': 2, 'color_param': 7, 'bright_param': 12}, {'minutes': time_2 | int, 'mode_param': 3, 'color_param': 8, 'bright_param': 13}, {'minutes': time_3 | int, 'mode_param': 4, 'color_param': 9, 'bright_param': 14}, {'minutes': time_4 | int, 'mode_param': 5, 'color_param': 10, 'bright_param': 15}] }}"
+
+  - choose:
+      # ---- Small buttons 1-4: start/restart the countdown ----
+      - conditions: "{{ trigger.id in ['button_1', 'button_2', 'button_3', 'button_4'] }}"
+        sequence:
+          - variables:
+              pressed_minutes: >
+                {% set idx = {'button_1': 0, 'button_2': 1, 'button_3': 2, 'button_4': 3}[trigger.id] %}
+                {{ buttons[idx].minutes | int }}
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "23"
+              value: "1"
+              endpoint: "0"
+          - service: timer.start
+            target:
+              entity_id: !input countdown_timer
+            data:
+              duration: "{{ '%02d:%02d:00' | format(pressed_minutes // 60, pressed_minutes % 60) }}"
+          - repeat:
+              for_each: "{{ buttons }}"
+              sequence:
+                - variables:
+                    lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
+                    next_lower: "{{ (lowers | max) if lowers | length > 0 else 0 }}"
+                - service: zwave_js.set_config_parameter
+                  target:
+                    device_id: !input zen32_device
+                  data:
+                    parameter: "{{ repeat.item.color_param }}"
+                    value: "{{ led_color }}"
+                    endpoint: "0"
+                - service: zwave_js.set_config_parameter
+                  target:
+                    device_id: !input zen32_device
+                  data:
+                    parameter: "{{ repeat.item.bright_param }}"
+                    value: "{{ led_brightness }}"
+                    endpoint: "0"
+                - service: zwave_js.set_config_parameter
+                  target:
+                    device_id: !input zen32_device
+                  data:
+                    parameter: "{{ repeat.item.mode_param }}"
+                    value: "{{ '3' if pressed_minutes > repeat.item.minutes else ('3' if pressed_minutes > next_lower else '2') }}"
+                    endpoint: "0"
+          - service: input_select.select_option
+            target:
+              entity_id: !input switch_status
+            data:
+              option: "On - Countdown Timer"
+          - service: homeassistant.turn_on
+            target:
+              entity_id: !input target_switch
+
+      # ---- Big paddle: manual on/off (toggle only needed if not hardware-wired) ----
+      - conditions: "{{ trigger.id == 'paddle' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ not wired }}"
+                sequence:
+                  - service: homeassistant.toggle
+                    target:
+                      entity_id: !input target_switch
+
+      # ---- Switch turned on: figure out who turned it on and set the
+      #      paddle LED (and, for non-countdown automations, the dropdown) ----
+      - conditions: "{{ trigger.id == 'switch_on' }}"
+        sequence:
+          - variables:
+              auto_caused: "{{ trigger.to_state.context.parent_id is not none }}"
+              already_countdown: "{{ is_state(switch_status_entity, 'On - Countdown Timer') }}"
+          - choose:
+              - conditions: "{{ not auto_caused }}"
+                sequence:
+                  - service: input_select.select_option
+                    target:
+                      entity_id: !input switch_status
+                    data:
+                      option: "On - Manual"
+                  - variables:
+                      paddle_color: "{{ paddle_led_color }}"
+              - conditions: "{{ auto_caused and already_countdown }}"
+                sequence:
+                  - variables:
+                      paddle_color: "{{ countdown_led_color }}"
+            default:
+              - service: input_select.select_option
+                target:
+                  entity_id: !input switch_status
+                data:
+                  option: "On - External Automation"
+              - variables:
+                  paddle_color: "{{ external_led_color }}"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "6"
+              value: "{{ paddle_color }}"
+              endpoint: "0"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "11"
+              value: "{{ led_brightness }}"
+              endpoint: "0"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "1"
+              value: "3"
+              endpoint: "0"
+
+      # ---- Switch turned off (any reason): cancel timer, clear all LEDs ----
+      - conditions: "{{ trigger.id == 'switch_off' }}"
+        sequence:
+          - service: timer.cancel
+            target:
+              entity_id: !input countdown_timer
+          - service: input_select.select_option
+            target:
+              entity_id: !input switch_status
+            data:
+              option: "Off"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "1"
+              value: "2"
+              endpoint: "0"
+          - repeat:
+              for_each: "{{ buttons }}"
+              sequence:
+                - service: zwave_js.set_config_parameter
+                  target:
+                    device_id: !input zen32_device
+                  data:
+                    parameter: "{{ repeat.item.mode_param }}"
+                    value: "2"
+                    endpoint: "0"
+
+      # ---- Periodic tick: advance the blink/bracket display ----
+      - conditions: "{{ trigger.id == 'timer_tick' }}"
+        sequence:
+          - variables:
+              phase_on: "{{ ((now().timestamp() | int) // interval_seconds) % 2 == 0 }}"
+          - choose:
+              - conditions: "{{ is_state(timer_entity, 'active') }}"
+                sequence:
+                  - variables:
+                      finishes_at: "{{ state_attr(timer_entity, 'finishes_at') }}"
+                      remaining_sec: "{{ [(as_timestamp(finishes_at) - as_timestamp(now())), 0] | max }}"
+                  - repeat:
+                      for_each: "{{ buttons }}"
+                      sequence:
+                        - variables:
+                            threshold_sec: "{{ repeat.item.minutes * 60 }}"
+                            lowers: "{{ buttons | selectattr('minutes', 'lt', repeat.item.minutes) | map(attribute='minutes') | list }}"
+                            next_lower_sec: "{{ ((lowers | max) if lowers | length > 0 else 0) * 60 }}"
+                        - service: zwave_js.set_config_parameter
+                          target:
+                            device_id: !input zen32_device
+                          data:
+                            parameter: "{{ repeat.item.mode_param }}"
+                            value: "{{ '3' if remaining_sec > threshold_sec else (('3' if phase_on else '2') if remaining_sec > next_lower_sec else '2') }}"
+                            endpoint: "0"
+          - choose:
+              - conditions: "{{ is_state(switch_entity, 'on') }}"
+                sequence:
+                  - service: zwave_js.set_config_parameter
+                    target:
+                      device_id: !input zen32_device
+                    data:
+                      parameter: "1"
+                      value: "{{ '3' if states(switch_status_entity) in ['On - Manual', 'Off'] else ('3' if phase_on else '2') }}"
+                      endpoint: "0"
+
+      # ---- Home Assistant restart: disable flash, resync idle state ----
+      - conditions: "{{ trigger.id == 'ha_start' }}"
+        sequence:
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "23"
+              value: "1"
+              endpoint: "0"
+          - choose:
+              - conditions: "{{ is_state(switch_entity, 'off') }}"
+                sequence:
+                  - service: timer.cancel
+                    target:
+                      entity_id: !input countdown_timer
+                  - service: input_select.select_option
+                    target:
+                      entity_id: !input switch_status
+                    data:
+                      option: "Off"
+                  - service: zwave_js.set_config_parameter
+                    target:
+                      device_id: !input zen32_device
+                    data:
+                      parameter: "1"
+                      value: "2"
+                      endpoint: "0"
+                  - repeat:
+                      for_each: "{{ buttons }}"
+                      sequence:
+                        - service: zwave_js.set_config_parameter
+                          target:
+                            device_id: !input zen32_device
+                          data:
+                            parameter: "{{ repeat.item.mode_param }}"
+                            value: "2"
+                            endpoint: "0"
