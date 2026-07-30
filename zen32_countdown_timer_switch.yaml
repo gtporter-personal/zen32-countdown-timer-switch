@@ -32,10 +32,13 @@ blueprint:
     4. Optional: if you have a Generic Hygrostat helper (Settings >
        Devices & Services > Helpers > Create Helper > Generic Hygrostat)
        set to Dehumidifier mode and controlling this same switch to manage
-       room humidity, select it as `hygrostat_entity` below. This
-       blueprint watches its `action` attribute directly rather than
-       guessing from the switch's state, so it's reliable even if the
-       hygrostat takes over a switch that's already on.
+       room humidity, select it as `hygrostat_entity` below. Its `action`
+       attribute just mirrors whether its target switch is currently on
+       while it's armed - it's not a record of "I decided to turn this
+       on", so this blueprint only trusts it once event context has
+       already ruled out a manual/paddle cause (see below). It also means
+       a hygrostat taking over a switch that's already on for another
+       reason won't relabel it - there's no reliable signal to catch that.
 
 
     **Button behavior:**
@@ -49,17 +52,19 @@ blueprint:
       `countdown_led_color` and dropdown set to `On - Countdown Timer` if
       this blueprint's countdown turned it on; blinking in
       `humidity_led_color` and dropdown set to `On - Humidity Control` if
-      the optional `hygrostat_entity` is actively dehumidifying; blinking
-      in `external_led_color` and dropdown set to `On - External Automation`
-      if any other automation turned it on (this blueprint only knows
-      "not me, not the hygrostat, and not manual", so it labels any other
-      automation-caused on-state that way). Manual vs. automation is told
-      apart using Home Assistant's event context, so it's only reliable
-      when `switch_directly_wired` is on (the default) - when it's off,
-      this blueprint's own paddle-press toggle also counts as
-      automation-triggered and will show `On - External Automation` even
-      though you pressed the paddle, a side effect of routing that toggle
-      through a service call.
+      it wasn't manual, wasn't this blueprint's countdown, and the
+      optional `hygrostat_entity` currently reports `action: drying`;
+      blinking in `external_led_color` and dropdown set to
+      `On - External Automation` for anything else automation-caused.
+      Manual is always checked first and wins over the hygrostat check,
+      so a paddle press (or dashboard toggle) is never mislabeled as
+      humidity control even if the hygrostat happens to be armed and
+      ends up mirroring the switch's new "on" state. This manual/automation
+      split is told apart using Home Assistant's event context, so it's
+      only reliable when `switch_directly_wired` is on (the default) -
+      when it's off, this blueprint's own paddle-press toggle also counts
+      as automation-triggered and won't be recognized as manual, a side
+      effect of routing that toggle through a service call.
 
     - Small buttons 1-4: if the switch is off, turns it on and starts a
       countdown for that button's configured time. If the switch is
@@ -359,11 +364,6 @@ trigger:
     entity_id: !input target_switch
     to: "off"
     id: switch_off
-  - platform: state
-    entity_id: !input hygrostat_entity
-    attribute: action
-    to: "drying"
-    id: humidity_start
   - platform: time_pattern
     seconds: !input blink_interval
     id: timer_tick
@@ -475,15 +475,6 @@ action:
                 sequence:
                   - variables:
                       paddle_color: "{{ countdown_led_color }}"
-              - conditions: "{{ hygrostat_active }}"
-                sequence:
-                  - service: input_select.select_option
-                    target:
-                      entity_id: !input switch_status
-                    data:
-                      option: "On - Humidity Control"
-                  - variables:
-                      paddle_color: "{{ humidity_led_color }}"
               - conditions: "{{ not auto_caused }}"
                 sequence:
                   - service: input_select.select_option
@@ -493,6 +484,15 @@ action:
                       option: "On - Manual"
                   - variables:
                       paddle_color: "{{ paddle_led_color }}"
+              - conditions: "{{ auto_caused and hygrostat_active }}"
+                sequence:
+                  - service: input_select.select_option
+                    target:
+                      entity_id: !input switch_status
+                    data:
+                      option: "On - Humidity Control"
+                  - variables:
+                      paddle_color: "{{ humidity_led_color }}"
             default:
               - service: input_select.select_option
                 target:
@@ -507,38 +507,6 @@ action:
             data:
               parameter: "6"
               value: "{{ paddle_color }}"
-              endpoint: "0"
-          - service: zwave_js.set_config_parameter
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "11"
-              value: "{{ led_brightness }}"
-              endpoint: "0"
-          - service: zwave_js.set_config_parameter
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "1"
-              value: "3"
-              endpoint: "0"
-
-      # ---- Hygrostat starts actively dehumidifying: this is authoritative
-      #      regardless of whether the switch was already on for another
-      #      reason (e.g. it takes over a switch already on manually) ----
-      - conditions: "{{ trigger.id == 'humidity_start' }}"
-        sequence:
-          - service: input_select.select_option
-            target:
-              entity_id: !input switch_status
-            data:
-              option: "On - Humidity Control"
-          - service: zwave_js.set_config_parameter
-            target:
-              device_id: !input zen32_device
-            data:
-              parameter: "6"
-              value: "{{ humidity_led_color }}"
               endpoint: "0"
           - service: zwave_js.set_config_parameter
             target:

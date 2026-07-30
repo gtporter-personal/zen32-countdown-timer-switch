@@ -26,7 +26,9 @@ https://github.com/gtporter-personal/zen32-countdown-timer-switch/blob/main/zen3
   `On - External Automation`, `On - Manual`.
 - Optional: a Generic Hygrostat helper (domain `humidifier`, Dehumidifier
   mode) controlling the same switch, if you want automatic humidity control
-  reflected on the paddle LED and dropdown.
+  reflected on the paddle LED and dropdown. Its `action` attribute is only
+  trusted once event context has already ruled out a manual/paddle cause,
+  so pressing the paddle is never mislabeled as humidity control.
 
 ## What it does
 
