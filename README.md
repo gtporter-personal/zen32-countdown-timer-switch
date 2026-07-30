@@ -21,14 +21,19 @@ https://github.com/gtporter-personal/zen32-countdown-timer-switch/blob/main/zen3
 - A Zooz ZEN32 scene controller paired via the Z-Wave JS integration.
 - A `timer` helper (Settings > Devices & Services > Helpers > Create Helper > Timer).
   Duration doesn't matter, it's overridden on every button press.
-- An `input_select` (dropdown) helper with exactly these four options:
-  `Off`, `On - Countdown Timer`, `On - External Automation`, `On - Manual`.
+- An `input_select` (dropdown) helper with exactly these five options:
+  `Off`, `On - Countdown Timer`, `On - Humidity Control`,
+  `On - External Automation`, `On - Manual`.
+- Optional: a Generic Hygrostat helper (domain `humidifier`, Dehumidifier
+  mode) controlling the same switch, if you want automatic humidity control
+  reflected on the paddle LED and dropdown.
 
 ## What it does
 
 - **Big paddle**: manual on/off, always available. Its LED shows *why* the
   switch is on - solid for manual, blinking for this blueprint's countdown,
-  blinking a different color for any other automation.
+  blinking a different color when the optional hygrostat is actively
+  dehumidifying, blinking a fourth color for any other automation.
 - **Small buttons 1-4**: press one while the switch is off to turn it on for
   that button's configured time. Press one while it's already on to
   restart the countdown at the new duration.

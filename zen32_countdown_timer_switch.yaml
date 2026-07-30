@@ -13,9 +13,9 @@ blueprint:
        button is pressed. The dropdown remembers *why* the switch is
        currently on so the paddle LED and any other automation can agree
        on it - name it whatever you like, but its options must be exactly
-       these four strings: `Off`, `On - Countdown Timer`,
-       `On - External Automation`, `On - Manual`. Select both helpers
-       below.
+       these five strings: `Off`, `On - Countdown Timer`,
+       `On - Humidity Control`, `On - External Automation`, `On - Manual`.
+       Select both helpers below.
 
     2. Wire the switch to the ZEN32's load (relay) terminals if you want
        the big paddle to physically switch it even when Home Assistant is
@@ -29,6 +29,14 @@ blueprint:
        restart, so the countdown LEDs don't get an extra flash on top of
        the intended blink.
 
+    4. Optional: if you have a Generic Hygrostat helper (Settings >
+       Devices & Services > Helpers > Create Helper > Generic Hygrostat)
+       set to Dehumidifier mode and controlling this same switch to manage
+       room humidity, select it as `hygrostat_entity` below. This
+       blueprint watches its `action` attribute directly rather than
+       guessing from the switch's state, so it's reliable even if the
+       hygrostat takes over a switch that's already on.
+
 
     **Button behavior:**
 
@@ -40,13 +48,15 @@ blueprint:
       physical toggle, or the Home Assistant dashboard; blinking in
       `countdown_led_color` and dropdown set to `On - Countdown Timer` if
       this blueprint's countdown turned it on; blinking in
-      `external_led_color` and dropdown set to `On - External Automation`
+      `humidity_led_color` and dropdown set to `On - Humidity Control` if
+      the optional `hygrostat_entity` is actively dehumidifying; blinking
+      in `external_led_color` and dropdown set to `On - External Automation`
       if any other automation turned it on (this blueprint only knows
-      "not me and not manual", so it labels any other automation-caused
-      on-state that way). Manual vs. automation is told apart using Home
-      Assistant's event context, so it's only reliable when
-      `switch_directly_wired` is on (the default) - when it's off, this
-      blueprint's own paddle-press toggle also counts as
+      "not me, not the hygrostat, and not manual", so it labels any other
+      automation-caused on-state that way). Manual vs. automation is told
+      apart using Home Assistant's event context, so it's only reliable
+      when `switch_directly_wired` is on (the default) - when it's off,
+      this blueprint's own paddle-press toggle also counts as
       automation-triggered and will show `On - External Automation` even
       though you pressed the paddle, a side effect of routing that toggle
       through a service call.
@@ -97,10 +107,21 @@ blueprint:
       name: Switch status dropdown helper
       description: >
         The `input_select` helper created in setup step 1. Its options must
-        be exactly: Off, On - Countdown Timer, On - External Automation, On - Manual.
+        be exactly: Off, On - Countdown Timer, On - Humidity Control,
+        On - External Automation, On - Manual.
       selector:
         entity:
           domain: input_select
+    hygrostat_entity:
+      name: Hygrostat entity (optional)
+      description: >
+        A Generic Hygrostat helper (domain `humidifier`, device class
+        dehumidifier) controlling the same switch for humidity control.
+        Leave blank if you don't have one.
+      default: []
+      selector:
+        entity:
+          domain: humidifier
     switch_directly_wired:
       name: Switch is wired to the relay
       description: >
@@ -194,6 +215,28 @@ blueprint:
       name: Big paddle LED color - countdown timer
       description: Paddle LED color while this blueprint's countdown has the switch on (blinking).
       default: "5"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: "0"
+              label: White
+            - value: "1"
+              label: Blue
+            - value: "2"
+              label: Green
+            - value: "3"
+              label: Red
+            - value: "4"
+              label: Magenta
+            - value: "5"
+              label: Yellow
+            - value: "6"
+              label: Cyan
+    humidity_led_color:
+      name: Big paddle LED color - humidity control
+      description: Paddle LED color while the hygrostat has the switch on for humidity control (blinking).
+      default: "6"
       selector:
         select:
           mode: dropdown
@@ -316,6 +359,11 @@ trigger:
     entity_id: !input target_switch
     to: "off"
     id: switch_off
+  - platform: state
+    entity_id: !input hygrostat_entity
+    attribute: action
+    to: "drying"
+    id: humidity_start
   - platform: time_pattern
     seconds: !input blink_interval
     id: timer_tick
@@ -335,7 +383,9 @@ action:
       led_color: !input led_color
       paddle_led_color: !input paddle_led_color
       countdown_led_color: !input countdown_led_color
+      humidity_led_color: !input humidity_led_color
       external_led_color: !input external_led_color
+      hygrostat_raw: !input hygrostat_entity
       led_brightness: !input led_brightness
       blink_interval: !input blink_interval
       time_1: !input time_1
@@ -343,6 +393,7 @@ action:
       time_3: !input time_3
       time_4: !input time_4
       interval_seconds: "{{ blink_interval | replace('/', '') | int }}"
+      hygrostat_id: "{{ hygrostat_raw if hygrostat_raw is string and hygrostat_raw != '' else (hygrostat_raw[0] if hygrostat_raw is sequence and hygrostat_raw | count > 0 else none) }}"
       buttons: "{{ [{'minutes': time_1 | int, 'mode_param': 2, 'color_param': 7, 'bright_param': 12}, {'minutes': time_2 | int, 'mode_param': 3, 'color_param': 8, 'bright_param': 13}, {'minutes': time_3 | int, 'mode_param': 4, 'color_param': 9, 'bright_param': 14}, {'minutes': time_4 | int, 'mode_param': 5, 'color_param': 10, 'bright_param': 15}] }}"
 
   - choose:
@@ -418,7 +469,21 @@ action:
           - variables:
               auto_caused: "{{ trigger.to_state.context.parent_id is not none }}"
               already_countdown: "{{ is_state(switch_status_entity, 'On - Countdown Timer') }}"
+              hygrostat_active: "{{ hygrostat_id is not none and state_attr(hygrostat_id, 'action') == 'drying' }}"
           - choose:
+              - conditions: "{{ auto_caused and already_countdown }}"
+                sequence:
+                  - variables:
+                      paddle_color: "{{ countdown_led_color }}"
+              - conditions: "{{ hygrostat_active }}"
+                sequence:
+                  - service: input_select.select_option
+                    target:
+                      entity_id: !input switch_status
+                    data:
+                      option: "On - Humidity Control"
+                  - variables:
+                      paddle_color: "{{ humidity_led_color }}"
               - conditions: "{{ not auto_caused }}"
                 sequence:
                   - service: input_select.select_option
@@ -428,10 +493,6 @@ action:
                       option: "On - Manual"
                   - variables:
                       paddle_color: "{{ paddle_led_color }}"
-              - conditions: "{{ auto_caused and already_countdown }}"
-                sequence:
-                  - variables:
-                      paddle_color: "{{ countdown_led_color }}"
             default:
               - service: input_select.select_option
                 target:
@@ -446,6 +507,38 @@ action:
             data:
               parameter: "6"
               value: "{{ paddle_color }}"
+              endpoint: "0"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "11"
+              value: "{{ led_brightness }}"
+              endpoint: "0"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "1"
+              value: "3"
+              endpoint: "0"
+
+      # ---- Hygrostat starts actively dehumidifying: this is authoritative
+      #      regardless of whether the switch was already on for another
+      #      reason (e.g. it takes over a switch already on manually) ----
+      - conditions: "{{ trigger.id == 'humidity_start' }}"
+        sequence:
+          - service: input_select.select_option
+            target:
+              entity_id: !input switch_status
+            data:
+              option: "On - Humidity Control"
+          - service: zwave_js.set_config_parameter
+            target:
+              device_id: !input zen32_device
+            data:
+              parameter: "6"
+              value: "{{ humidity_led_color }}"
               endpoint: "0"
           - service: zwave_js.set_config_parameter
             target:
