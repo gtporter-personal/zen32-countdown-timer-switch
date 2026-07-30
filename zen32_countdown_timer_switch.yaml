@@ -35,37 +35,39 @@ blueprint:
        room humidity, select it as `hygrostat_entity` below. Its `action`
        attribute just mirrors whether its target switch is currently on
        while it's armed - it's not a record of "I decided to turn this
-       on", so this blueprint only trusts it once event context has
-       already ruled out a manual/paddle cause (see below). It also means
+       on" - and its own service calls don't carry the kind of context an
+       automation run does, so this blueprint can't reliably tell "the
+       hygrostat just turned this on" apart from "something else turned
+       it on and the hygrostat is just reflecting that" by itself. A
+       paddle press is always exempted from this ambiguity (see below);
        a hygrostat taking over a switch that's already on for another
        reason won't relabel it - there's no reliable signal to catch that.
 
 
     **Button behavior:**
 
-    - Big paddle: manual on/off, always available. Turning the switch off
-      (by any means) cancels any running countdown, sets the dropdown
-      helper to `Off`, and clears all the LEDs. Its own LED stays solid
-      the whole time the switch is on (it never blinks - only the active
-      countdown button's LED does that) and its color shows *why* the
-      switch is on: `paddle_led_color` and dropdown set to `On - Manual`
-      if it was switched on manually - paddle press, physical toggle, or
-      the Home Assistant dashboard; `countdown_led_color` and dropdown set
-      to `On - Countdown Timer` if this blueprint's countdown turned it
-      on; `humidity_led_color` and dropdown set to `On - Humidity Control`
-      if it wasn't manual, wasn't this blueprint's countdown, and the
-      optional `hygrostat_entity` currently reports `action: drying`;
-      `external_led_color` and dropdown set to `On - External Automation`
-      for anything else automation-caused. Manual is always checked first
-      and wins over the hygrostat check, so a paddle press (or dashboard
-      toggle) is never mislabeled as humidity control even if the
-      hygrostat happens to be armed and ends up mirroring the switch's new
-      "on" state. This manual/automation split is told apart using Home
-      Assistant's event context, so it's only reliable when
-      `switch_directly_wired` is on (the default) - when it's off, this
-      blueprint's own paddle-press toggle also counts as
-      automation-triggered and won't be recognized as manual, a side
-      effect of routing that toggle through a service call.
+    - Big paddle: manual on/off, always available. A paddle press always
+      tags the dropdown `On - Manual` immediately (it's the one signal this
+      blueprint can always trust, since nothing but a physical press can
+      trigger that Central Scene event) - this works the same whether or
+      not `switch_directly_wired` is on. Turning the switch off (by any
+      means) cancels any running countdown, sets the dropdown to `Off`,
+      and clears all the LEDs. Its own LED stays solid the whole time the
+      switch is on (it never blinks - only the active countdown button's
+      LED does that) and its color shows *why* the switch is on:
+      `paddle_led_color` for `On - Manual`; `countdown_led_color` for
+      `On - Countdown Timer` if this blueprint's countdown turned it on;
+      `humidity_led_color` for `On - Humidity Control` if the optional
+      `hygrostat_entity` currently reports `action: drying`;
+      `external_led_color` for `On - External Automation` for anything
+      else automation-caused. Outside of a paddle press or this
+      blueprint's own countdown, there's no reliable way to tell a
+      Home Assistant dashboard toggle apart from the hygrostat's own
+      service call - neither carries the kind of context an automation
+      run does - so the hygrostat check is trusted first and a dashboard
+      toggle that happens to coincide with the hygrostat also wanting the
+      switch on will show as humidity control rather than manual. A
+      paddle press is never affected by that ambiguity.
 
     - Small buttons 1-4: if the switch is off, turns it on and starts a
       countdown for that button's configured time. If the switch is
@@ -481,9 +483,19 @@ action:
             target:
               entity_id: !input target_switch
 
-      # ---- Big paddle: manual on/off (toggle only needed if not hardware-wired) ----
+      # ---- Big paddle: manual on/off (toggle only needed if not hardware-wired).
+      #      Self-tags "On - Manual" immediately so switch_on can trust it over
+      #      any ambiguous automation-vs-manual signal (see below) - a physical
+      #      paddle press is the one thing we can always be certain about. If
+      #      this turns the switch off instead, switch_off resets it to "Off"
+      #      right after anyway, so tagging unconditionally here is harmless. ----
       - conditions: "{{ trigger.id == 'paddle' }}"
         sequence:
+          - service: input_select.select_option
+            target:
+              entity_id: !input switch_status
+            data:
+              option: "On - Manual"
           - choose:
               - conditions: "{{ not wired }}"
                 sequence:
@@ -506,12 +518,36 @@ action:
           - variables:
               auto_caused: "{{ trigger.to_state.context.parent_id is not none }}"
               already_countdown: "{{ is_state(switch_status_entity, 'On - Countdown Timer') }}"
+              already_manual: "{{ is_state(switch_status_entity, 'On - Manual') }}"
               hygrostat_active: "{{ hygrostat_id is not none and state_attr(hygrostat_id, 'action') == 'drying' }}"
           - choose:
+              # Self-tagged by this blueprint's own countdown or paddle branch
+              # moments ago - these are certain, so they win outright.
               - conditions: "{{ auto_caused and already_countdown }}"
                 sequence:
                   - variables:
                       paddle_color: "{{ countdown_led_color }}"
+              - conditions: "{{ already_manual }}"
+                sequence:
+                  - variables:
+                      paddle_color: "{{ paddle_led_color }}"
+              # Not self-tagged: fall back to best-effort signals. Hygrostat's
+              # action mirrors its target switch's live state rather than
+              # recording a decision, and event context can't tell a manual
+              # dashboard toggle from the hygrostat's own service call either
+              # (neither carries automation-engine context) - so this order
+              # only mislabels a dashboard toggle (not a paddle press, that's
+              # always caught above) that happens to coincide with the
+              # hygrostat also wanting the switch on.
+              - conditions: "{{ hygrostat_active }}"
+                sequence:
+                  - service: input_select.select_option
+                    target:
+                      entity_id: !input switch_status
+                    data:
+                      option: "On - Humidity Control"
+                  - variables:
+                      paddle_color: "{{ humidity_led_color }}"
               - conditions: "{{ not auto_caused }}"
                 sequence:
                   - service: input_select.select_option
@@ -521,15 +557,6 @@ action:
                       option: "On - Manual"
                   - variables:
                       paddle_color: "{{ paddle_led_color }}"
-              - conditions: "{{ auto_caused and hygrostat_active }}"
-                sequence:
-                  - service: input_select.select_option
-                    target:
-                      entity_id: !input switch_status
-                    data:
-                      option: "On - Humidity Control"
-                  - variables:
-                      paddle_color: "{{ humidity_led_color }}"
             default:
               - service: input_select.select_option
                 target:
