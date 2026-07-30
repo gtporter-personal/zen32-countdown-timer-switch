@@ -328,7 +328,8 @@ blueprint:
             - value: "/60"
               label: Every 60 seconds (least traffic)
 
-mode: restart
+mode: queued
+max: 10
 max_exceeded: silent
 
 trigger:
